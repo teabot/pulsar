@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -18,9 +18,8 @@
  */
 package org.apache.pulsar.broker.loadbalance.impl;
 
-import java.util.HashSet;
+import java.util.HashMap;
 import java.util.Map;
-import java.util.Set;
 import org.apache.pulsar.broker.PulsarService;
 import org.apache.pulsar.broker.ServiceConfiguration;
 import org.apache.pulsar.broker.loadbalance.BundleSplitStrategy;
@@ -37,14 +36,18 @@ import org.slf4j.LoggerFactory;
  */
 public class BundleSplitterTask implements BundleSplitStrategy {
     private static final Logger log = LoggerFactory.getLogger(BundleSplitStrategy.class);
-    private final Set<String> bundleCache;
+    private final Map<String, String> bundleCache;
+
+    private final Map<String, Integer> namespaceBundleCount;
+
 
     /**
      * Construct a BundleSplitterTask.
      *
      */
     public BundleSplitterTask() {
-        bundleCache = new HashSet<>();
+        bundleCache = new HashMap<>();
+        namespaceBundleCount = new HashMap<>();
     }
 
     /**
@@ -56,17 +59,19 @@ public class BundleSplitterTask implements BundleSplitStrategy {
      * @param pulsar
      *            Service to use.
      * @return All bundles who have exceeded configured thresholds in number of topics, number of sessions, total
-     *         message rates, or total throughput.
+     *         message rates, or total throughput and the brokers on which they reside.
      */
     @Override
-    public Set<String> findBundlesToSplit(final LoadData loadData, final PulsarService pulsar) {
+    public Map<String, String> findBundlesToSplit(final LoadData loadData, final PulsarService pulsar) {
         bundleCache.clear();
+        namespaceBundleCount.clear();
         final ServiceConfiguration conf = pulsar.getConfiguration();
         int maxBundleCount = conf.getLoadBalancerNamespaceMaximumBundles();
         long maxBundleTopics = conf.getLoadBalancerNamespaceBundleMaxTopics();
         long maxBundleSessions = conf.getLoadBalancerNamespaceBundleMaxSessions();
         long maxBundleMsgRate = conf.getLoadBalancerNamespaceBundleMaxMsgRate();
         long maxBundleBandwidth = conf.getLoadBalancerNamespaceBundleMaxBandwidthMbytes() * LoadManagerShared.MIBI;
+
         loadData.getBrokerData().forEach((broker, brokerData) -> {
             LocalBrokerData localData = brokerData.getLocalData();
             for (final Map.Entry<String, NamespaceBundleStats> entry : localData.getLastStats().entrySet()) {
@@ -93,8 +98,17 @@ public class BundleSplitterTask implements BundleSplitStrategy {
                     try {
                         final int bundleCount = pulsar.getNamespaceService()
                                 .getBundleCount(NamespaceName.get(namespace));
-                        if (bundleCount < maxBundleCount) {
-                            bundleCache.add(bundle);
+                        if ((bundleCount + namespaceBundleCount.getOrDefault(namespace, 0))
+                                < maxBundleCount) {
+                            log.info("The bundle {} is considered to be unload. Topics: {}/{}, Sessions: ({}+{})/{}, "
+                                            + "Message Rate: {}/{} (msgs/s), Message Throughput: {}/{} (MB/s)",
+                                    bundle, stats.topics, maxBundleTopics, stats.producerCount, stats.consumerCount,
+                                    maxBundleSessions, totalMessageRate, maxBundleMsgRate,
+                                    totalMessageThroughput / LoadManagerShared.MIBI,
+                                    maxBundleBandwidth / LoadManagerShared.MIBI);
+                            bundleCache.put(bundle, broker);
+                            int bundleNum = namespaceBundleCount.getOrDefault(namespace, 0);
+                            namespaceBundleCount.put(namespace, bundleNum + 1);
                         } else {
                             if (log.isDebugEnabled()) {
                                 log.debug(

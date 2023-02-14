@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -19,11 +19,13 @@
 package org.apache.pulsar.client.impl;
 
 import static org.apache.pulsar.client.impl.UnAckedMessageTracker.addChunkedMessageIdsAndRemoveFromSequenceMap;
+import com.google.common.annotations.VisibleForTesting;
 import io.netty.util.Timeout;
 import io.netty.util.Timer;
 import java.io.Closeable;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import org.apache.pulsar.client.api.Message;
@@ -93,10 +95,7 @@ class NegativeAcksTracker implements Closeable {
     }
 
     private synchronized void add(MessageId messageId, int redeliveryCount) {
-        if (messageId instanceof TopicMessageIdImpl) {
-            TopicMessageIdImpl topicMessageId = (TopicMessageIdImpl) messageId;
-            messageId = topicMessageId.getInnerMessageId();
-        }
+        messageId = MessageIdImpl.convertToMessageIdImpl(messageId);
 
         if (messageId instanceof BatchMessageIdImpl) {
             BatchMessageIdImpl batchMessageId = (BatchMessageIdImpl) messageId;
@@ -121,6 +120,11 @@ class NegativeAcksTracker implements Closeable {
             // nack immediately following the current one will be batched into the same redeliver request.
             this.timeout = timer.newTimeout(this::triggerRedelivery, timerIntervalNanos, TimeUnit.NANOSECONDS);
         }
+    }
+
+    @VisibleForTesting
+    Optional<Integer> getNackedMessagesCount() {
+        return Optional.ofNullable(nackedMessages).map(HashMap::size);
     }
 
     @Override

@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -93,7 +93,8 @@ public class LedgerUnderreplicationManagerTest extends BaseMetadataStoreTest {
     private void methodSetup(Supplier<String> urlSupplier) throws Exception {
         this.executor = Executors.newSingleThreadExecutor();
         String ledgersRoot = "/ledgers-" + UUID.randomUUID();
-        this.store = MetadataStoreExtended.create(urlSupplier.get(), MetadataStoreConfig.builder().build());
+        this.store = MetadataStoreExtended.create(urlSupplier.get(),
+                MetadataStoreConfig.builder().fsyncEnable(false).build());
         this.layoutManager = new PulsarLayoutManager(store, ledgersRoot);
         this.lmf = new PulsarLedgerManagerFactory();
 
@@ -241,7 +242,7 @@ public class LedgerUnderreplicationManagerTest extends BaseMetadataStoreTest {
 
     /**
      * Test that when a ledger has been marked as replicated, it
-     * will not be offered to anther client.
+     * will not be offered to another client.
      * This test checked that by marking two ledgers, and acquiring
      * them on a single client. It marks one as replicated and then
      * the client is killed. We then check that another client can

@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -27,6 +27,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
+import lombok.extern.slf4j.Slf4j;
 import org.apache.pulsar.client.api.Authentication;
 import org.apache.pulsar.client.api.AuthenticationFactory;
 import org.apache.pulsar.client.api.PulsarClientException;
@@ -37,6 +38,7 @@ import org.mockito.Mockito;
 import org.testng.annotations.Test;
 
 @Test(groups = "broker-impl")
+@Slf4j
 public class AutoClusterFailoverTest {
     @Test
     public void testBuildAutoClusterFailoverInstance() throws PulsarClientException {
@@ -222,12 +224,14 @@ public class AutoClusterFailoverTest {
         autoClusterFailover.initialize(pulsarClient);
 
         Awaitility.await().untilAsserted(() -> assertEquals(autoClusterFailover.getServiceUrl(), secondary));
+        Mockito.verify(pulsarClient, Mockito.atLeastOnce()).reloadLookUp();
         Mockito.verify(pulsarClient, Mockito.atLeastOnce()).updateTlsTrustCertsFilePath(secondaryTlsTrustCertsFilePath);
         Mockito.verify(pulsarClient, Mockito.atLeastOnce()).updateAuthentication(secondaryAuthentication);
 
         // primary cluster came back
         Mockito.doReturn(true).when(autoClusterFailover).probeAvailable(primary);
         Awaitility.await().untilAsserted(() -> assertEquals(autoClusterFailover.getServiceUrl(), primary));
+        Mockito.verify(pulsarClient, Mockito.atLeastOnce()).reloadLookUp();
         Mockito.verify(pulsarClient, Mockito.atLeastOnce()).updateTlsTrustCertsFilePath(primaryTlsTrustCertsFilePath);
         Mockito.verify(pulsarClient, Mockito.atLeastOnce()).updateAuthentication(primaryAuthentication);
 

@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -23,8 +23,6 @@ import static org.apache.commons.lang3.StringUtils.isBlank;
 import static org.apache.commons.lang3.StringUtils.isEmpty;
 import static org.apache.commons.lang3.StringUtils.isNotBlank;
 import static org.apache.pulsar.common.stats.JvmMetrics.getJvmDirectMemoryUsed;
-import static org.slf4j.bridge.SLF4JBridgeHandler.install;
-import static org.slf4j.bridge.SLF4JBridgeHandler.removeHandlersForRootLogger;
 import com.beust.jcommander.JCommander;
 import com.beust.jcommander.Parameter;
 import com.google.common.annotations.VisibleForTesting;
@@ -38,6 +36,7 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.Date;
 import lombok.Getter;
+import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.core.util.datetime.FixedDateFormat;
 import org.apache.pulsar.broker.PulsarServerException;
 import org.apache.pulsar.broker.ServiceConfiguration;
@@ -49,6 +48,7 @@ import org.apache.pulsar.common.configuration.VipStatus;
 import org.apache.pulsar.common.policies.data.ClusterData;
 import org.apache.pulsar.common.util.CmdGenerateDocs;
 import org.apache.pulsar.common.util.DirectMemoryUtils;
+import org.apache.pulsar.common.util.ShutdownUtil;
 import org.apache.pulsar.proxy.stats.ProxyStats;
 import org.apache.pulsar.websocket.WebSocketConsumerServlet;
 import org.apache.pulsar.websocket.WebSocketPingPongServlet;
@@ -104,14 +104,10 @@ public class ProxyServiceStarter {
     private ProxyService proxyService;
 
     private WebServer server;
+    private static boolean metricsInitialized;
 
     public ProxyServiceStarter(String[] args) throws Exception {
         try {
-
-            // setup handlers
-            removeHandlersForRootLogger();
-            install();
-
             DateFormat dateFormat = new SimpleDateFormat(
                 FixedDateFormat.FixedFormat.ISO8601_OFFSET_DATE_TIME_HHMM.getPattern());
             Thread.setDefaultUncaughtExceptionHandler((thread, exception) -> {
@@ -137,20 +133,19 @@ public class ProxyServiceStarter {
                 }
             } catch (Exception e) {
                 jcommander.usage();
-                System.exit(-1);
+                System.exit(1);
             }
 
             // load config file
             config = PulsarConfigurationLoader.create(configFile, ProxyConfiguration.class);
 
+            if (!isBlank(zookeeperServers)) {
+                // Use zookeeperServers from command line
+                config.setMetadataStoreUrl(zookeeperServers);
+            }
             if (!isBlank(metadataStoreUrl)) {
                 // Use metadataStoreUrl from command line
                 config.setMetadataStoreUrl(metadataStoreUrl);
-            } else if (!isBlank(zookeeperServers)){
-                // Use zookeeperServers from command line if metadataStoreUrl is empty;
-                config.setMetadataStoreUrl(zookeeperServers);
-            } else {
-                // use "metadataStoreUrl" property in "proxy.conf".
             }
 
             if (!isBlank(globalZookeeperServers)) {
@@ -198,7 +193,7 @@ public class ProxyServiceStarter {
             serviceStarter.start();
         } catch (Throwable t) {
             log.error("Failed to start proxy.", t);
-            Runtime.getRuntime().halt(1);
+            ShutdownUtil.triggerImmediateForcefulShutdown();
         }
     }
 
@@ -214,23 +209,27 @@ public class ProxyServiceStarter {
 
         proxyService.start();
 
-        // Setup metrics
-        DefaultExports.initialize();
+        if (!metricsInitialized) {
+            // Setup metrics
+            DefaultExports.initialize();
 
-        // Report direct memory from Netty counters
-        Gauge.build("jvm_memory_direct_bytes_used", "-").create().setChild(new Child() {
-            @Override
-            public double get() {
-                return getJvmDirectMemoryUsed();
-            }
-        }).register(CollectorRegistry.defaultRegistry);
+            // Report direct memory from Netty counters
+            Gauge.build("jvm_memory_direct_bytes_used", "-").create().setChild(new Child() {
+                @Override
+                public double get() {
+                    return getJvmDirectMemoryUsed();
+                }
+            }).register(CollectorRegistry.defaultRegistry);
 
-        Gauge.build("jvm_memory_direct_bytes_max", "-").create().setChild(new Child() {
-            @Override
-            public double get() {
-                return DirectMemoryUtils.jvmMaxDirectMemory();
-            }
-        }).register(CollectorRegistry.defaultRegistry);
+            Gauge.build("jvm_memory_direct_bytes_max", "-").create().setChild(new Child() {
+                @Override
+                public double get() {
+                    return DirectMemoryUtils.jvmMaxDirectMemory();
+                }
+            }).register(CollectorRegistry.defaultRegistry);
+
+            metricsInitialized = true;
+        }
 
         addWebServerHandlers(server, config, proxyService, proxyService.getDiscoveryProvider());
 
@@ -248,6 +247,8 @@ public class ProxyServiceStarter {
             }
         } catch (Exception e) {
             log.warn("server couldn't stop gracefully {}", e.getMessage(), e);
+        } finally {
+            LogManager.shutdown();
         }
     }
 
@@ -267,7 +268,6 @@ public class ProxyServiceStarter {
 
         AdminProxyHandler adminProxyHandler = new AdminProxyHandler(config, discoveryProvider);
         ServletHolder servletHolder = new ServletHolder(adminProxyHandler);
-        servletHolder.setInitParameter("preserveHost", "true");
         server.addServlet("/admin", servletHolder);
         server.addServlet("/lookup", servletHolder);
 
